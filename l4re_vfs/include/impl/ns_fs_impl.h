@@ -382,9 +382,57 @@ Env_dir::getdents(char *buf, size_t sz) noexcept
         return ret;
     }
 
-  // bit of a hack because we should only (re)set this when opening the dir
+  /* After cap entries, emit VFS mount-point children (e.g. "dev"). */
+  if (!ret && mount_tree() && !_mt_done)
+    {
+      /* Initialise mount-tree iteration on first entry of this phase. */
+      if (!_mt_child)
+        _mt_child = mount_tree()->first_child();
+
+      while (_mt_child)
+        {
+          /* Only emit nodes that actually have something mounted on them. */
+          if (!_mt_child->mount())
+            { _mt_child = _mt_child->next_sibling(); continue; }
+
+          char const *name = _mt_child->path_name();
+          if (!name)
+            { _mt_child = _mt_child->next_sibling(); continue; }
+
+          unsigned l = strlen(name) + 1;
+          if (l > sizeof(d->d_name)) l = sizeof(d->d_name);
+          unsigned n = offsetof(struct dirent64, d_name) + l;
+          n = (n + sizeof(long) - 1) & ~(sizeof(long) - 1);
+
+          if (n > sz)
+            return ret; /* buffer full, caller will retry */
+
+          d->d_ino    = 2;
+          d->d_off    = 0;
+          d->d_reclen = (unsigned short)n;
+          d->d_type   = DT_DIR;
+          memcpy(d->d_name, name, l);
+          d->d_name[l - 1] = 0;
+          ret += n;
+          sz  -= n;
+          d = reinterpret_cast<struct dirent64 *>
+                (reinterpret_cast<unsigned long>(d) + n);
+
+          _mt_child = _mt_child->next_sibling();
+          if (!_mt_child)
+            _mt_done = true; /* last sibling consumed */
+          return ret; /* yield one entry per call, matching existing pattern */
+        }
+      _mt_done = true; /* all mount children emitted (skipped or zero) */
+    }
+
+  /* bit of a hack because we should only (re)set this when opening the dir */
   if (!ret)
-    _current_cap_entry = _env->initial_caps();
+    {
+      _current_cap_entry = _env->initial_caps();
+      _mt_child = nullptr;
+      _mt_done = false;
+    }
 
   return ret;
 }

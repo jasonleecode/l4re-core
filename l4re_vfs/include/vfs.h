@@ -594,6 +594,10 @@ public:
   void add_ref() noexcept { ++_ref_cnt; }
   int remove_ref() noexcept { return --_ref_cnt; }
 
+  char const *path_name() const noexcept { return _name; }
+  cxx::Ref_ptr<Mount_tree> first_child() const noexcept { return _cld; }
+  cxx::Ref_ptr<Mount_tree> next_sibling() const noexcept { return _sib; }
+
 private:
   friend class Real_mount_tree;
 

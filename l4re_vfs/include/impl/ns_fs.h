@@ -41,6 +41,8 @@ private:
 
   L4Re::Env const *_env;
   Env::Cap_entry const *_current_cap_entry;
+  cxx::Ref_ptr<L4Re::Vfs::Mount_tree> _mt_child;
+  bool _mt_done = false;
 };
 
 class Ns_dir : public L4Re::Vfs::Be_file
