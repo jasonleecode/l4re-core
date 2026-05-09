@@ -199,6 +199,13 @@ Ns_dir::getdents(char *buf, size_t dest_sz) noexcept
 
       // next infodirfile line
       p += len;
+      // Optional type tag appended directly after name, before newline:
+      // 'd' = directory (DT_DIR), 'f' = regular file (DT_REG).
+      // Absent = DT_UNKNOWN (backward-compatible with old format).
+      if (p < end && (*p == 'd' || *p == 'f')) {
+        dest->d_type = (*p == 'd') ? DT_DIR : DT_REG;
+        p++;
+      }
       while (p < end && *p && (*p == '\n' || *p == '\r'))
         p++;
 
