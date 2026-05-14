@@ -13,6 +13,16 @@
 #include <l4/sys/ipc.h>
 #include <dirent.h>
 
+// ns_fs_impl.h is compiled into both regular processes (where libc printf is
+// available) and ldso (freestanding, no libc).  Gate printf behind the macro
+// that ldso defines so the linker in the freestanding build doesn't complain.
+#ifndef IS_IN_rtld
+#  include <stdio.h>
+#  define VFS_DBG(fmt, ...) printf(fmt, ##__VA_ARGS__)
+#else
+#  define VFS_DBG(fmt, ...) do {} while (0)
+#endif
+
 namespace L4Re { namespace Core {
 
 // Zero-timeout probe via Meta::num_interfaces() (opcode 0, no args).
@@ -36,16 +46,20 @@ cap_to_vfs_object(L4::Cap<void> o, int *err)
 {
   L4::Cap<L4::Meta> m = L4::cap_reinterpret_cast<L4::Meta>(o);
   *err = -ENOPROTOOPT;
-  // Skip the blocking interface() IPC if the cap doesn't respond to Meta.
+  VFS_DBG("[vfs:co] probe cap=0x%lx\n", (unsigned long)m.cap());
   if (!meta_probe(m.cap()))
-    return Ref_ptr<L4Re::Vfs::File>();
-
+    {
+      VFS_DBG("[vfs:co] probe FAIL cap=0x%lx\n", (unsigned long)m.cap());
+      return Ref_ptr<L4Re::Vfs::File>();
+    }
+  VFS_DBG("[vfs:co] probe ok, interface() cap=0x%lx\n", (unsigned long)m.cap());
   long proto = 0;
   char name_buf[256];
   L4::Ipc::String<char> name(sizeof(name_buf), name_buf);
   l4_ret_t r = l4_error(m->interface(0, &proto, &name));
+  VFS_DBG("[vfs:co] interface() cap=0x%lx r=%ld proto=%ld\n",
+         (unsigned long)m.cap(), (long)r, proto);
   if (r < 0)
-    // could not get type of object so bail out
     return Ref_ptr<L4Re::Vfs::File>();
 
   *err = -EPROTO;
@@ -346,8 +360,8 @@ Env_dir::faccessat(const char *path, int mode, int /*flags*/) noexcept
 bool
 Env_dir::check_type(Env::Cap_entry const *e, long protocol) noexcept
 {
-  // Use zero send timeout so unresponsive caps (sigma0, rtc blocked on IRQ,
-  // etc.) fail immediately instead of hanging ls/getdents forever.
+  VFS_DBG("[vfs:ct] '%s' cap=0x%lx proto=0x%lx\n",
+         e->name, (unsigned long)e->cap, (unsigned long)protocol);
   l4_utcb_t *u = l4_utcb();
   l4_msg_regs_t *mr = l4_utcb_mr_u(u);
   mr->mr[0] = 2;                      // Meta::supports() — 3rd in Rpcs (0=num_interfaces,1=interface,2=supports)
@@ -356,8 +370,15 @@ Env_dir::check_type(Env::Cap_entry const *e, long protocol) noexcept
   tag = l4_ipc_call(e->cap, u, tag,
                     l4_timeout(L4_IPC_TIMEOUT_0, L4_IPC_TIMEOUT_NEVER));
   if (l4_msgtag_has_error(tag))
-    return false;
-  return l4_msgtag_label(tag) > 0;  // supports() returns label=1 if supported
+    {
+      VFS_DBG("[vfs:ct] '%s' IPC-err=0x%lx -> false\n",
+             e->name, l4_utcb_tcr_u(u)->error);
+      return false;
+    }
+  bool result = l4_msgtag_label(tag) > 0;
+  VFS_DBG("[vfs:ct] '%s' label=%ld -> %d\n",
+         e->name, l4_msgtag_label(tag), (int)result);
+  return result;
 }
 
 int
@@ -403,12 +424,16 @@ Env_dir::getdents(char *buf, size_t sz) noexcept
           memcpy(d->d_name, _current_cap_entry->name, l);
           d->d_name[l - 1] = 0;
           d->d_reclen = n;
+          VFS_DBG("[vfs:gd] entry '%s' cap=0x%lx\n",
+                 _current_cap_entry->name, (unsigned long)_current_cap_entry->cap);
           if (check_type(_current_cap_entry, L4Re::Namespace::Protocol))
             d->d_type = DT_DIR;
           else if (check_type(_current_cap_entry, L4Re::Dataspace::Protocol))
             d->d_type = DT_REG;
           else
             d->d_type = DT_UNKNOWN;
+          VFS_DBG("[vfs:gd] '%s' -> d_type=%d\n",
+                 _current_cap_entry->name, d->d_type);
           ret += n;
           sz  -= n;
           d    = reinterpret_cast<struct dirent64 *>
