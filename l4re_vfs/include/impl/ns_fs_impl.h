@@ -15,16 +15,35 @@
 
 namespace L4Re { namespace Core {
 
+// Zero-timeout probe via Meta::num_interfaces() (opcode 0, no args).
+// Returns false immediately if the cap is unresponsive (sigma0, rtc blocked
+// on IRQ, etc.) so callers can skip the slow interface()/supports() IPC.
+static bool
+meta_probe(l4_cap_idx_t cap) noexcept
+{
+  l4_utcb_t *u = l4_utcb();
+  l4_msg_regs_t *mr = l4_utcb_mr_u(u);
+  mr->mr[0] = 0;  // Meta::num_interfaces() — no input args
+  l4_msgtag_t tag = l4_msgtag(L4_PROTO_META, 1, 0, 0);
+  tag = l4_ipc_call(cap, u, tag,
+                    l4_timeout(L4_IPC_TIMEOUT_0, L4_IPC_TIMEOUT_NEVER));
+  return !l4_msgtag_has_error(tag);
+}
+
 static
 Ref_ptr<L4Re::Vfs::File>
 cap_to_vfs_object(L4::Cap<void> o, int *err)
 {
   L4::Cap<L4::Meta> m = L4::cap_reinterpret_cast<L4::Meta>(o);
+  *err = -ENOPROTOOPT;
+  // Skip the blocking interface() IPC if the cap doesn't respond to Meta.
+  if (!meta_probe(m.cap()))
+    return Ref_ptr<L4Re::Vfs::File>();
+
   long proto = 0;
   char name_buf[256];
   L4::Ipc::String<char> name(sizeof(name_buf), name_buf);
   l4_ret_t r = l4_error(m->interface(0, &proto, &name));
-  *err = -ENOPROTOOPT;
   if (r < 0)
     // could not get type of object so bail out
     return Ref_ptr<L4Re::Vfs::File>();
@@ -331,14 +350,14 @@ Env_dir::check_type(Env::Cap_entry const *e, long protocol) noexcept
   // etc.) fail immediately instead of hanging ls/getdents forever.
   l4_utcb_t *u = l4_utcb();
   l4_msg_regs_t *mr = l4_utcb_mr_u(u);
-  mr->mr[0] = 0;                      // Meta::supports() opcode
+  mr->mr[0] = 2;                      // Meta::supports() — 3rd in Rpcs (0=num_interfaces,1=interface,2=supports)
   mr->mr[1] = (l4_umword_t)protocol;
   l4_msgtag_t tag = l4_msgtag(L4_PROTO_META, 2, 0, 0);
   tag = l4_ipc_call(e->cap, u, tag,
                     l4_timeout(L4_IPC_TIMEOUT_0, L4_IPC_TIMEOUT_NEVER));
   if (l4_msgtag_has_error(tag))
     return false;
-  return (bool)mr->mr[0];
+  return l4_msgtag_label(tag) > 0;  // supports() returns label=1 if supported
 }
 
 int
