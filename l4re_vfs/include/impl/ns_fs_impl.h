@@ -10,6 +10,7 @@
 #include <l4/re/dataspace>
 #include <l4/re/util/env_ns>
 #include <l4/re/unique_cap>
+#include <l4/sys/ipc.h>
 #include <dirent.h>
 
 namespace L4Re { namespace Core {
@@ -326,8 +327,18 @@ Env_dir::faccessat(const char *path, int mode, int /*flags*/) noexcept
 bool
 Env_dir::check_type(Env::Cap_entry const *e, long protocol) noexcept
 {
-  L4::Cap<L4::Meta> m(e->cap);
-  return m->supports(protocol).label();
+  // Use zero send timeout so unresponsive caps (sigma0, rtc blocked on IRQ,
+  // etc.) fail immediately instead of hanging ls/getdents forever.
+  l4_utcb_t *u = l4_utcb();
+  l4_msg_regs_t *mr = l4_utcb_mr_u(u);
+  mr->mr[0] = 0;                      // Meta::supports() opcode
+  mr->mr[1] = (l4_umword_t)protocol;
+  l4_msgtag_t tag = l4_msgtag(L4_PROTO_META, 2, 0, 0);
+  tag = l4_ipc_call(e->cap, u, tag,
+                    l4_timeout(L4_IPC_TIMEOUT_0, L4_IPC_TIMEOUT_NEVER));
+  if (l4_msgtag_has_error(tag))
+    return false;
+  return (bool)mr->mr[0];
 }
 
 int
