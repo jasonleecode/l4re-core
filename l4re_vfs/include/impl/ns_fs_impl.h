@@ -18,6 +18,9 @@
 // that ldso defines so the linker in the freestanding build doesn't complain.
 #ifndef IS_IN_rtld
 #  include <stdio.h>
+#endif
+// VFS trace messages disabled for production; define L4_VFS_DEBUG to re-enable
+#ifdef L4_VFS_DEBUG
 #  define VFS_DBG(fmt, ...) printf(fmt, ##__VA_ARGS__)
 #else
 #  define VFS_DBG(fmt, ...) do {} while (0)
