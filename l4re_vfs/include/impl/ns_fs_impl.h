@@ -12,6 +12,7 @@
 #include <l4/re/unique_cap>
 #include <l4/sys/ipc.h>
 #include <dirent.h>
+#include <fcntl.h>
 
 // ns_fs_impl.h is compiled into both regular processes (where libc printf is
 // available) and ldso (freestanding, no libc).  Gate printf behind the macro
@@ -63,7 +64,7 @@ meta_probe(l4_cap_idx_t cap) noexcept
 
 static
 Ref_ptr<L4Re::Vfs::File>
-cap_to_vfs_object(L4::Cap<void> o, int *err)
+cap_to_vfs_object(L4::Cap<void> o, int *err, int oflags = 0)
 {
   L4::Cap<L4::Meta> m = L4::cap_reinterpret_cast<L4::Meta>(o);
   *err = -ENOPROTOOPT;
@@ -96,7 +97,21 @@ cap_to_vfs_object(L4::Cap<void> o, int *err)
     return Ref_ptr<L4Re::Vfs::File>();
 
   *err = -ENOMEM;
-  return factory->create(o);
+  Ref_ptr<L4Re::Vfs::File> f = factory->create(o);
+
+  // Apply open-time flags the VFS framework does not handle itself (openat()
+  // only forwards them to get_entry).  These are generic File ops: backends
+  // that don't support them (read-only files, namespaces) reject/ignore
+  // harmlessly, so this stays protocol-agnostic.
+  if (f)
+    {
+      if ((oflags & O_TRUNC) && (oflags & O_ACCMODE) != O_RDONLY)
+        f->ftruncate(0);
+      if (oflags & O_APPEND)
+        f->set_status_flags(O_APPEND);
+    }
+
+  return f;
 }
 
 
@@ -118,7 +133,7 @@ Ns_dir::get_ds(const char *path, L4Re::Unique_cap<L4Re::Dataspace> *ds) noexcept
 }
 
 int
-Ns_dir::get_entry(const char *path, int /*flags*/, mode_t /*mode*/,
+Ns_dir::get_entry(const char *path, int flags, mode_t /*mode*/,
                   Ref_ptr<L4Re::Vfs::File> *f) noexcept
 {
   if (!*path)
@@ -133,7 +148,7 @@ Ns_dir::get_entry(const char *path, int /*flags*/, mode_t /*mode*/,
   if (err < 0)
     return -ENOENT;
 
-  cxx::Ref_ptr<L4Re::Vfs::File> fi = cap_to_vfs_object(file.get(), &err);
+  cxx::Ref_ptr<L4Re::Vfs::File> fi = cap_to_vfs_object(file.get(), &err, flags);
   if (!fi)
     return err;
 
@@ -315,7 +330,7 @@ Env_dir::get_ds(const char *path, L4Re::Unique_cap<L4Re::Dataspace> *ds) noexcep
 }
 
 int
-Env_dir::get_entry(const char *path, int /*flags*/, mode_t /*mode*/,
+Env_dir::get_entry(const char *path, int flags, mode_t /*mode*/,
                    Ref_ptr<L4Re::Vfs::File> *f) noexcept
 {
   if (!*path)
@@ -330,7 +345,7 @@ Env_dir::get_entry(const char *path, int /*flags*/, mode_t /*mode*/,
   if (err < 0)
     return -ENOENT;
 
-  cxx::Ref_ptr<L4Re::Vfs::File> fi = cap_to_vfs_object(file.get(), &err);
+  cxx::Ref_ptr<L4Re::Vfs::File> fi = cap_to_vfs_object(file.get(), &err, flags);
   if (!fi)
     return err;
 
