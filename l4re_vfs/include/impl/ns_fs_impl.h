@@ -28,9 +28,28 @@
 
 namespace L4Re { namespace Core {
 
-// Zero-timeout probe via Meta::num_interfaces() (opcode 0, no args).
-// Returns false immediately if the cap is unresponsive (sigma0, rtc blocked
-// on IRQ, etc.) so callers can skip the slow interface()/supports() IPC.
+// Timeout for Meta probes sent to initial caps.  The *send* timeout is 0 so
+// the call fails fast when the peer is not in a receive-wait.  But if the peer
+// *is* receiving yet never replies — e.g. sigma0, which accepts the message
+// and sends no answer — an L4_IPC_TIMEOUT_NEVER *receive* would block the
+// caller forever.  That is the probabilistic `cd` / Tab-completion hang: it
+// fires only in the window where an unresponsive cap happens to be in
+// receive-wait at probe time.  A finite receive timeout bounds it.  50 ms is
+// far above the worst-case Meta round-trip (~3 ms under load per cyclictest),
+// so a responsive VFS namespace server is never falsely timed out, while a
+// silent cap is abandoned after 50 ms instead of hanging the shell.
+enum { Vfs_meta_rcv_us = 50000 };
+
+static inline l4_timeout_t
+meta_call_timeout() noexcept
+{
+  return l4_timeout(L4_IPC_TIMEOUT_0, l4_timeout_from_us(Vfs_meta_rcv_us));
+}
+
+// Bounded probe via Meta::num_interfaces() (opcode 0, no args).  Returns false
+// if the cap is unresponsive — either not in a receive-wait (send fails fast)
+// or in receive-wait but not replying (receive times out after 50 ms) — so
+// callers can skip the slow interface()/supports() IPC without risking a hang.
 static bool
 meta_probe(l4_cap_idx_t cap) noexcept
 {
@@ -38,8 +57,7 @@ meta_probe(l4_cap_idx_t cap) noexcept
   l4_msg_regs_t *mr = l4_utcb_mr_u(u);
   mr->mr[0] = 0;  // Meta::num_interfaces() — no input args
   l4_msgtag_t tag = l4_msgtag(L4_PROTO_META, 1, 0, 0);
-  tag = l4_ipc_call(cap, u, tag,
-                    l4_timeout(L4_IPC_TIMEOUT_0, L4_IPC_TIMEOUT_NEVER));
+  tag = l4_ipc_call(cap, u, tag, meta_call_timeout());
   return !l4_msgtag_has_error(tag);
 }
 
@@ -370,8 +388,9 @@ Env_dir::check_type(Env::Cap_entry const *e, long protocol) noexcept
   mr->mr[0] = 2;                      // Meta::supports() — 3rd in Rpcs (0=num_interfaces,1=interface,2=supports)
   mr->mr[1] = (l4_umword_t)protocol;
   l4_msgtag_t tag = l4_msgtag(L4_PROTO_META, 2, 0, 0);
-  tag = l4_ipc_call(e->cap, u, tag,
-                    l4_timeout(L4_IPC_TIMEOUT_0, L4_IPC_TIMEOUT_NEVER));
+  // Finite receive timeout — same reasoning as meta_probe(): a silent cap in
+  // receive-wait must not block getdents()/check_type() forever.
+  tag = l4_ipc_call(e->cap, u, tag, meta_call_timeout());
   if (l4_msgtag_has_error(tag))
     {
       VFS_DBG("[vfs:ct] '%s' IPC-err=0x%lx -> false\n",
