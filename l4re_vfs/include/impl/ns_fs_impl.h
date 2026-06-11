@@ -437,6 +437,31 @@ Env_dir::fstat(struct stat64 *b) const noexcept
   return 0;
 }
 
+// Local string compare: ldso links a minimal libc without strcmp().
+static inline bool env_dir_str_eq(char const *a, char const *b) noexcept
+{
+  while (*a && *a == *b) { ++a; ++b; }
+  return *a == *b;
+}
+
+bool
+Env_dir::name_is_mount(char const *name) noexcept
+{
+  cxx::Ref_ptr<L4Re::Vfs::Mount_tree> mt = mount_tree();
+  if (!mt)
+    return false;
+  for (cxx::Ref_ptr<L4Re::Vfs::Mount_tree> c = mt->first_child();
+       c; c = c->next_sibling())
+    {
+      if (!c->mount())
+        continue;
+      char const *pn = c->path_name();
+      if (pn && env_dir_str_eq(pn, name))
+        return true;
+    }
+  return false;
+}
+
 ssize_t
 Env_dir::getdents(char *buf, size_t sz) noexcept
 {
@@ -447,6 +472,30 @@ Env_dir::getdents(char *buf, size_t sz) noexcept
          && _current_cap_entry
          && _current_cap_entry->flags != ~0UL)
     {
+      // Only browsable namespaces are listed at the environment root (as
+      // directories).  Everything else — service-gate caps (spawnd, authd,
+      // syslogd), device/bus caps (rtc, fb, input; note a vbus also answers the
+      // Dataspace protocol, so a plain ns||ds test would leak it), and bare
+      // dataspaces — is reached programmatically via get_cap() and surfaced
+      // under /dev or /svc, not as a loose, uncategorised root entry.  Hiding
+      // them from the listing does not affect opening them by name.
+      if (!check_type(_current_cap_entry, L4Re::Namespace::Protocol))
+        {
+          VFS_DBG("[vfs:gd] skip non-namespace cap '%s'\n",
+                 _current_cap_entry->name);
+          _current_cap_entry++;
+          continue;
+        }
+      // Dedup: a VFS mount shadows the cap of the same name for path lookup, so
+      // list it once (in the mount phase below), not twice.
+      if (name_is_mount(_current_cap_entry->name))
+        {
+          VFS_DBG("[vfs:gd] skip mount-shadowed cap '%s'\n",
+                 _current_cap_entry->name);
+          _current_cap_entry++;
+          continue;
+        }
+
       unsigned l = strlen(_current_cap_entry->name) + 1;
       if (l > sizeof(d->d_name))
         l = sizeof(d->d_name);
@@ -461,16 +510,9 @@ Env_dir::getdents(char *buf, size_t sz) noexcept
           memcpy(d->d_name, _current_cap_entry->name, l);
           d->d_name[l - 1] = 0;
           d->d_reclen = n;
-          VFS_DBG("[vfs:gd] entry '%s' cap=0x%lx\n",
-                 _current_cap_entry->name, (unsigned long)_current_cap_entry->cap);
-          if (check_type(_current_cap_entry, L4Re::Namespace::Protocol))
-            d->d_type = DT_DIR;
-          else if (check_type(_current_cap_entry, L4Re::Dataspace::Protocol))
-            d->d_type = DT_REG;
-          else
-            d->d_type = DT_UNKNOWN;
-          VFS_DBG("[vfs:gd] '%s' -> d_type=%d\n",
-                 _current_cap_entry->name, d->d_type);
+          d->d_type = DT_DIR;   // only namespaces reach here
+          VFS_DBG("[vfs:gd] entry '%s' -> d_type=DIR\n",
+                 _current_cap_entry->name);
           ret += n;
           sz  -= n;
           d    = reinterpret_cast<struct dirent64 *>

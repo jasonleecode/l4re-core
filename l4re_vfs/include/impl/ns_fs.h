@@ -38,6 +38,10 @@ public:
 private:
   int get_ds(const char *path, L4Re::Unique_cap<L4Re::Dataspace> *ds) noexcept;
   bool check_type(Env::Cap_entry const *e, long protocol) noexcept;
+  // True if a VFS mount point shadows this name (e.g. the "dev" driver-registry
+  // namespace cap vs the devfs mount): the mount is what path lookup resolves
+  // to, so the cap entry must not also be listed (avoids a duplicate "dev/").
+  bool name_is_mount(char const *name) noexcept;
 
   L4Re::Env const *_env;
   Env::Cap_entry const *_current_cap_entry;
