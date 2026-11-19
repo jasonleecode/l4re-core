@@ -52,10 +52,9 @@ LIB1ASMFUNCS +=  _arm_negdf2 _arm_addsubdf3 _arm_muldivdf3 _arm_cmpdf2 _arm_unor
 endif
 
 # -- From libgcc/config/arm/t-bpabi ---
-# Prevent make from trying to build bpabi.S from bpabi.c via generic BID rules.
-# Match on any version in case old dependency info still points to
-# another/older version.
-$(LIBGCC_PKG_DIR)/contrib/gcc-%/libgcc/config/arm/bpabi.S: ;
+# bpabi.S is a checked-in input. An explicit rule takes precedence over
+# the generic .c -> .S recipe even when the checkout makes bpabi.c newer.
+$(LIBGCC_CONTRIB_SRC_DIR)/config/arm/bpabi.S: ;
 
 # Add the bpabi.S functions.
 LIB1ASMFUNCS += _aeabi_lcmp _aeabi_ulcmp _aeabi_ldivmod _aeabi_uldivmod
