@@ -56,30 +56,32 @@ install_cpu_header = $(VERBOSE)$(if $(call cpu_header,$(1)),$(LN) -sf $(call cpu
 
 LIBSUPC_H += $(foreach V,$(STDCXX_AVAILABLE_VERSIONS),$(LIBSUPC_H-$(V)_PLUS-$(STDCXX_CONTRIB_VERSION_$(V)_PLUS)))
 
-LIBSUPC_HI = $(addprefix $(INSTALL_INCDIR_X)/, $(LIBSUPC_H))
-STDCXX_CSTD_HEADERS_ABS = $(addprefix $(INSTALL_INCDIR_X)/, $(STDCXX_CSTD_HEADERS))
-
 
 std_header_list = $(strip $(1)) std_$(strip $(1)).h
 
 choose_std_header = $(word 1, $(wildcard $(foreach DIR,$(STDCXX_STD_DIRS),$(addprefix $(INCSRC_DIR)/$(DIR)/, $(call std_header_list, $(1))))))
 
-$(STDCXX_CSTD_HEADERS_ABS): %: $(BID_ROOT_CONF) | $(INSTALL_INCDIR_X)
-	@$(INSTALL_LINK_MESSAGE) $@
-	$(VERBOSE)src_hdr="$(call choose_std_header,$(notdir $@))"; \
-	  [ -e "$$src_hdr" ] || \
-	    { echo "Source file \"$$src_hdr\" for \"$@\" not found."; exit 1; }; \
-	  $(LN) -sf "$$src_hdr" $@
+# A link inherits its source header's mtime, often older than .config.all.
+# Compare resolved paths so an intact installation is cheap and a changed
+# toolchain or a removed/replaced link is picked up on the next invocation.
+define ensure_std_link
+ifneq ($(realpath $1),$(or $(realpath $2),missing-header))
+all:: $1
+.PHONY: $1
+$1: | $(INSTALL_INCDIR_X)
+	@$$(INSTALL_LINK_MESSAGE) $$@
+	$$(VERBOSE)test -f "$2" && $$(MKDIR) $$(@D) && $$(LN) -sf "$2" $$@
+endif
+endef
 
-$(LIBSUPC_HI): %: $(BID_ROOT_CONF) | $(INSTALL_INCDIR_X)
-	@$(INSTALL_LINK_MESSAGE) $@
-	$(VERBOSE)$(call install_header, libsupc++/$(notdir $@), $(patsubst $(INSTALL_INCDIR_X)/%,%,$@))
+$(foreach h,$(sort $(STDCXX_CSTD_HEADERS)),  $(eval $(call ensure_std_link,$(INSTALL_INCDIR_X)/$(h),$(call choose_std_header,$(h)))))
+$(foreach h,$(LIBSUPC_H),  $(eval $(call ensure_std_link,$(INSTALL_INCDIR_X)/$(h),$(SRCDIR_X)/libsupc++/$(notdir $(h)))))
 
 $(INSTALL_INCDIR_X):
 	@$(INSTALL_LINK_MESSAGE) $(INSTALL_INCDIR_X)
 	$(VERBOSE)$(INSTALL) -d $(INSTALL_INCDIR_X)
 
-all:: $(LIBSUPC_HI) $(STDCXX_CSTD_HEADERS_ABS) $(BID_ROOT_CONF) | $(INSTALL_INCDIR_X)
+all:: $(BID_ROOT_CONF) | $(INSTALL_INCDIR_X)
 	@$(INSTALL_LINK_MESSAGE)
 	$(VERBOSE)$(call install_config_header, $(ALLOCATOR_H),     c++allocator.h)
 	$(VERBOSE)$(call install_config_header, $(CLOCALE_H),       c++locale.h)
